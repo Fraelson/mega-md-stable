@@ -480,6 +480,20 @@ async function connectToWhatsApp() {
         ...cryptoOptions
     });
 
+    // Pairing by phone number for the main bot. QR remains enabled as fallback.
+    // Request exactly once per socket and only when the auth state is unregistered.
+    const pairingNumber = String(config.PAIRING_NUMBER || '').replace(/\D/g, '');
+    if (!state.creds.registered && pairingNumber.length >= 7) {
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(pairingNumber);
+                logMessage('INFO', `🔑 Pair code for +${pairingNumber}: ${code}`);
+            } catch (e) {
+                logMessage('WARN', `Pairing code request failed for +${pairingNumber}: ${e.message}`);
+            }
+        }, 2000);
+    }
+
     // bind the store so store.loadMessage works
     try {
         store.bind(sock.ev);
