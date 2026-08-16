@@ -463,7 +463,7 @@ async function connectToWhatsApp() {
 
     const sock = makeWASocket({
         logger: P({ level: 'silent' }),
-        printQRInTerminal: true,
+        // Pairing is handled explicitly below; do not render or expose QR codes.
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
         version,
@@ -480,19 +480,20 @@ async function connectToWhatsApp() {
         ...cryptoOptions
     });
 
-    // Pairing by phone number for the main bot. QR remains enabled as fallback.
-    // Request exactly once per socket and only when the auth state is unregistered.
+    // Pairing by phone number for the main bot. The request is triggered only
+    // after Baileys emits `qr`, which means the socket handshake is ready.
     const pairingNumber = String(config.PAIRING_NUMBER || '').replace(/\D/g, '');
-    if (!state.creds.registered && pairingNumber.length >= 7) {
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(pairingNumber);
-                logMessage('INFO', `🔑 Pair code for +${pairingNumber}: ${code}`);
-            } catch (e) {
-                logMessage('WARN', `Pairing code request failed for +${pairingNumber}: ${e.message}`);
-            }
-        }, 2000);
-    }
+    let pairingRequested = false;
+    let pendingCredsSave = Promise.resolve();
+
+    const queueCredsSave = (update) => {
+        pendingCredsSave = pendingCredsSave
+            .then(() => saveCreds(update))
+            .catch((e) => logMessage('WARN', `Credential save failed: ${e.message}`));
+        return pendingCredsSave;
+    };
+
+    sock.ev.on('creds.update', queueCredsSave);
 
     // bind the store so store.loadMessage works
     try {
@@ -605,15 +606,26 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async update => {
         const { connection, lastDisconnect, qr } = update;
 
-        // QR code received — log it so the user knows to scan
-        if (qr) {
-            logMessage('INFO', '📱 QR code ready — scan it in WhatsApp > Linked Devices');
+        // Baileys emits `qr` even when pairing by code is used. We deliberately
+        // ignore the QR payload and request one alphanumeric code per socket.
+        if (qr && !pairingRequested && !state.creds.registered && pairingNumber.length >= 7) {
+            pairingRequested = true;
+            try {
+                const code = await sock.requestPairingCode(pairingNumber);
+                logMessage('INFO', `🔑 Pair code for +${pairingNumber}: ${code}`);
+            } catch (e) {
+                pairingRequested = false;
+                logMessage('WARN', `Pairing code request failed for +${pairingNumber}: ${e.message}`);
+            }
         }
 
         if (connection === 'close') {
             // Stop the keep-alive ping for this socket — a new one starts on reconnect
             if (_keepAliveTimer) { clearInterval(_keepAliveTimer); _keepAliveTimer = null; }
 
+            // Ensure a pairing update (including fresh `me` keys) is persisted
+            // before a restart/reconnect reads the auth directory again.
+            await pendingCredsSave;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const reason     = lastDisconnect?.error?.message || '';
             logMessage('WARN', `Connection closed: ${statusCode || 'Unknown'}${reason ? ` (${reason})` : ''}`);
@@ -638,6 +650,12 @@ async function connectToWhatsApp() {
                 logMessage('WARN', '⚠️ Session conflict (440): another instance is using this session. Waiting 90s...');
                 _resetReconnect();
                 setTimeout(() => connectToWhatsApp(), 90000);
+            } else if (statusCode === DisconnectReason.restartRequired) {
+                // WhatsApp uses 515 after a successful pairing to request a
+                // fresh socket with the newly saved credentials.
+                logMessage('INFO', '[Reconnect] Restart required after pairing; reconnecting immediately.');
+                _resetReconnect();
+                setImmediate(() => connectToWhatsApp());
             } else if (statusCode === 408 || statusCode === 503 || statusCode === 500) {
                 // 408 = connection timeout, 503/500 = WhatsApp server errors
                 // Use exponential backoff — these happen when WA rate-limits reconnects
@@ -764,7 +782,6 @@ async function connectToWhatsApp() {
         }
     });
 
-    sock.ev.on('creds.update', saveCreds);
 
     // Capture LID ↔ phone mapping delivered by WhatsApp on connect.
     // Baileys 6.17.16+ stores this in creds automatically; this listener
