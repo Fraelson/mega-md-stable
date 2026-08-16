@@ -134,6 +134,26 @@ const pluginsDir = path.join(__dirname, 'plugins');
 // ✅ Session paths
 const sessionDir = process.env.SESSION_DIR || '/data/silva-session';
 const credsPath = path.join(sessionDir, 'creds.json');
+const pairingCooldownPath = path.join(sessionDir, '.pairing-last-request');
+const PAIRING_COOLDOWN_MS = 15 * 60 * 1000;
+
+function pairingCooldownRemaining() {
+    try {
+        const last = Number(fs.readFileSync(pairingCooldownPath, 'utf8').trim());
+        if (!Number.isFinite(last)) return 0;
+        return Math.max(0, PAIRING_COOLDOWN_MS - (Date.now() - last));
+    } catch {
+        return 0;
+    }
+}
+
+function markPairingRequest() {
+    try {
+        fs.writeFileSync(pairingCooldownPath, String(Date.now()), 'utf8');
+    } catch (e) {
+        logMessage('WARN', `Could not persist pairing cooldown: ${e.message}`);
+    }
+}
 
 // ✅ Create session directory if not exists
 function createDirIfNotExist(dir) {
@@ -609,7 +629,13 @@ async function connectToWhatsApp() {
         // Baileys emits `qr` even when pairing by code is used. We deliberately
         // ignore the QR payload and request one alphanumeric code per socket.
         if (qr && !pairingRequested && !state.creds.registered && pairingNumber.length >= 7) {
+            const remaining = pairingCooldownRemaining();
             pairingRequested = true;
+            if (remaining > 0) {
+                logMessage('WARN', `Pairing cooldown active; no new request for ${Math.ceil(remaining / 60000)} more minute(s).`);
+                return;
+            }
+            markPairingRequest();
             try {
                 const code = await sock.requestPairingCode(pairingNumber);
                 logMessage('INFO', `🔑 Pair code for +${pairingNumber}: ${code}`);
