@@ -48,7 +48,7 @@
     "@replit/connectors-sdk": "^0.2.0",
     "@shineiichijo/marika": "^3.0.1",
     "@vitalets/google-translate-api": "^9.2.1",
-    "@whiskeysockets/baileys": "6.7.24",
+    "@whiskeysockets/baileys": "github:poison/Baileys#834dc742e349958fd162f7a2239514e9b237fb5a",
     "@xct007/frieren-scraper": "^0.0.2",
     "@xct007/tiktok-scraper": "^1.0.2",
     "axios": "^1.18.0",
@@ -96,7 +96,7 @@
     "ytdl-core": "^4.11.5"
   },
   "overrides": {
-    "@whiskeysockets/baileys": "6.7.24",
+    "@whiskeysockets/baileys": "github:poison/Baileys#834dc742e349958fd162f7a2239514e9b237fb5a",
     "libsignal": "6.0.0",
     "form-data": "^4.0.0",
     "protobufjs": "^7.0.0",
